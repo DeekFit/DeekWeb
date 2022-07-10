@@ -1,5 +1,3 @@
-// (c) 2022 Deeko Software LLC. This code is licensed under MIT license.
-
 import 'dart:convert';
 import 'package:deekweb/deekweb.dart';
 import 'package:flutter/material.dart';
