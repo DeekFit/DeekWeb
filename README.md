@@ -11,6 +11,8 @@ One of the primary advantages to using Dart / Flutter over other frameworks is t
 
 DeekWeb gives you the advantage of predefining your contracts once, and using them where you need them, keeping your logic clean, safe, and readable.
 
+The approach here is heavily inspired by [Volley](https://google.github.io/volley/) for Android, but modernized for an async environment.
+
 ## Getting Started
 
 First, defined a request by extending **DeekWebRequest**.

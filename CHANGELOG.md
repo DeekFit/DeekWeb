@@ -1,3 +1,7 @@
+## 1.0.2
+
+* Nothing important, just trying to make pub.dev happy
+
 ## 1.0.1
 
 * Remove dependency on Flutter

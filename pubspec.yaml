@@ -1,8 +1,8 @@
 name: deekweb
 description: >-
   A strongly-typed HTTP library for Dart and Flutter. 
-  Provides mechanisms to define strongly-typed classes with response parsing for REST requests.
-version: 1.0.1
+  Provides mechanisms to define classes with response parsing for REST requests.
+version: 1.0.2
 repository: https://github.com/DeekFit/DeekWeb
 
 environment:
