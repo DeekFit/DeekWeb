@@ -1,3 +1,7 @@
+## 1.0.4
+
+* Fix missing errors on bad connections on web
+
 ## 1.0.3
 
 * Manually specify platforms to ensure web and UWP are detected

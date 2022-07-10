@@ -87,6 +87,13 @@ class DeekWebClient {
       result = DeekWebResponse.fromError(
           request: request, exception: DeekWebException.fromException(e));
       _notifyRequestError(requestId, error: "SocketException");
+    } on ClientException catch (e) {
+      // ClientException is thrown by web when there is no / broken network
+      // connection.
+      _logger?.error("DeekWebClient: [$requestId] ClientException: $e");
+      result = DeekWebResponse.fromError(
+          request: request, exception: DeekWebException.fromException(e));
+      _notifyRequestError(requestId, error: "ClientException");
     }
     return result;
   }
