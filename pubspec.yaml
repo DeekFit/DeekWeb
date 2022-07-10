@@ -3,7 +3,7 @@ description: >-
   A strongly-typed HTTP library for Dart and Flutter. 
 
   Provides mechanisms to define classes with response parsing for REST requests.
-version: 1.0.4
+version: 1.0.5
 repository: https://github.com/DeekFit/DeekWeb
 platforms:
   android:

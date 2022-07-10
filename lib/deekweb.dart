@@ -3,6 +3,7 @@
 library deekweb;
 
 export 'package:deekweb/impl/deekweb_listener.dart';
+export 'package:deekweb/impl/deekweb_logger.dart';
 export 'package:deekweb/impl/deekweb_request_exception.dart';
 export 'package:deekweb/impl/deekweb_client.dart';
 export 'package:deekweb/impl/deekweb_http_response.dart';
