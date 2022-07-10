@@ -1,3 +1,7 @@
+## 1.0.3
+
+* Manually specify platforms to ensure web and UWP are detected
+
 ## 1.0.2
 
 * Nothing important, just trying to make pub.dev happy
