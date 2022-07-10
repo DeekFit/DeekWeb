@@ -1,3 +1,8 @@
+## 1.0.1
+
+* Remove dependency on Flutter
+* Some pubspec cleanup
+
 ## 1.0.0
 
 ### First release!

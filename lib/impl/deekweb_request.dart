@@ -2,8 +2,6 @@
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
-
 import 'deekweb_http_response.dart';
 
 /// Base class for a strongly-typed request to a server.
@@ -81,10 +79,4 @@ enum Method {
   ///
   /// Updates or replaces existing data on the server.
   put
-}
-
-/// Extension method to convert a *Method* enum to a string.
-extension MethodExt on Method {
-  /// Gets the name of the HTTP method.
-  String get name => describeEnum(this);
 }
