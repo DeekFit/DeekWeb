@@ -1,3 +1,7 @@
+## 1.0.6
+
+* Update to new dependency versions
+
 ## 1.0.5
 
 * Add `DeekWebLogger` to the main export
