@@ -7,7 +7,7 @@ void main() => runApp(const ExampleApp());
 /// Example app that shows making a request with `DeekWebClient` and parsing
 /// the response.
 class ExampleApp extends StatelessWidget {
-  const ExampleApp({Key? key}) : super(key: key);
+  const ExampleApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +22,7 @@ class ExampleApp extends StatelessWidget {
 }
 
 class ExampleAppHomePage extends StatefulWidget {
-  const ExampleAppHomePage({Key? key}) : super(key: key);
+  const ExampleAppHomePage({super.key});
 
   @override
   State<StatefulWidget> createState() => _ExampleAppHomePageState();
