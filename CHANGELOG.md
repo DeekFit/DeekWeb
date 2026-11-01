@@ -1,6 +1,6 @@
-## 1.1.0
+## 2.0.0
 
-### Reliability, privacy and ownership
+### Breaking changes
 
 * Require Dart 3.4 or later and `http: ^1.6.0`.
 * Reuse a lazy owned transport per client, support borrowed HTTP clients, and add

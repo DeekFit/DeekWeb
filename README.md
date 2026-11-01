@@ -7,7 +7,7 @@ Flutter dependency.
 
 ## Quick start
 
-Add `deekweb: ^1.1.0` to your dependencies. This complete example fetches a todo
+Add `deekweb: ^2.0.0` to your dependencies. This complete example fetches a todo
 from JSONPlaceholder and parses its response into a Dart object:
 
 ```dart
@@ -202,9 +202,11 @@ conditional import. Browsers use the portable decoder. Only text enters the
 worker. Model construction stays with the caller; there is no payload threshold
 or frame-rate promise.
 
-## Upgrading from 1.0.x
+## Upgrading from 1.x
 
-Version 1.1.0 adds optional execution, interceptor and asynchronous parsing APIs.
+Version 2.0.0 raises the minimum Dart SDK to 3.4 and routes unsuccessful HTTP
+responses through the listener error callback. These changes warrant a major
+release. It also adds optional execution, interceptor and asynchronous parsing APIs.
 Existing request subclasses, synchronous parsers, constructor arguments, mutable
 default headers, legacy execution overrides and logger implementations remain
 supported.
