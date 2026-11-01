@@ -1,197 +1,504 @@
-// (c) 2022 Deeko Software LLC. This code is licensed under MIT license.
+import 'dart:async';
 
-import 'dart:io';
-
-import 'package:http/http.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
+import 'deekweb_http_response.dart';
+import 'deekweb_execution_options.dart';
+import 'deekweb_interceptor.dart';
 import 'deekweb_listener.dart';
 import 'deekweb_logger.dart';
-import 'deekweb_http_response.dart';
-import 'deekweb_request_exception.dart';
 import 'deekweb_request.dart';
+import 'deekweb_request_exception.dart';
 import 'deekweb_response.dart';
 
-/// A strongly typed REST client.
+/// An app-scoped client. Injected transports remain owned by the caller.
 class DeekWebClient {
-  static const String _defaultCvHeader = "cv-in";
-
   final DeekWebLogger? _logger;
-  final Set<DeekWebListener> _listeners = <DeekWebListener>{};
-
-  /// Gets or sets whether or not a CV (Correleation Vector) header should
-  /// be sent with requests. If true, the default header will be supplied.
-  /// You can override the header name by setting the *cvHeader* property.
+  final http.Client? _borrowedClient;
+  final List<DeekWebInterceptor> interceptors;
+  http.Client? _ownedClient;
+  bool _closed = false;
+  final Set<DeekWebListener> _listeners = {};
+  final Set<_Active> _active = {};
   bool includeCvHeader;
-
-  /// Gets or sets the CV (Correleation Vector) header to be sent with every
-  /// request. This header will only be sent if the *includeCvHeader* property
-  /// is also set to true.
   String cvHeader;
 
-  /// Creates a new instance of the *DeekWebClient* that can be used to
-  /// execute *DeekWebRequest*s.
-  ///
-  /// Although you may re-use *DeekWebClient* for many requests, the class
-  /// itself is not stateful so you can recreate it on demand when you
-  /// need to make requests.
-  ///
-  /// You may include a *logger* which will be used to log information about
-  /// request status.
-  ///
-  /// The *includeCvHeader* and *cvHeader* properties are used to request
-  /// a unique Correlation Vector be sent with every request.
   DeekWebClient(
       {DeekWebLogger? logger,
+      http.Client? client,
       this.includeCvHeader = false,
-      this.cvHeader = _defaultCvHeader})
-      : _logger = logger;
+      this.cvHeader = 'cv-in',
+      List<DeekWebInterceptor> interceptors = const []})
+      : _logger = logger,
+        _borrowedClient = client,
+        interceptors = List.unmodifiable(interceptors);
 
-  /// Executes a *DeekWebRequest* asynchronously.
   Future<DeekWebResponse<RequestType, ResponseType>>
       executeRequest<RequestType extends DeekWebRequest, ResponseType>(
-          DeekWebRequest<ResponseType> request) async {
-    // Generate a new CV and notify listeners.
-    // TODO: Optionally pass in the CV with the request.
-    String requestId = const Uuid().v4().toString();
-    _notifyRequestStarted(requestId, request.name);
+              DeekWebRequest<ResponseType> request) =>
+          executeRequestWithOptions<RequestType, ResponseType>(request,
+              options: DeekWebExecutionOptions());
 
-    var latencyTimer = Stopwatch();
-    latencyTimer.start();
-
-    late DeekWebResponse<RequestType, ResponseType> result;
-    try {
-      _logger?.info(
-          "DeekWebClient: [$requestId] Starting ${request.method} request ${request.name} to ${request.uriForLogging}");
-
-      // Execute the request and mark the time
-      var response = await _executeRequest(request, requestId);
-      int httpTime = latencyTimer.elapsedMilliseconds;
-      _logger?.verbose(
-          "DeekWebClient: [$requestId] http time: $httpTime ms, response code ${response.statusCode}");
-
-      // Handle the response, including parsing it to the <ResponseType>
-      result = _handleResponse(response, request, latencyTimer, requestId);
-      int parseTime = latencyTimer.elapsedMilliseconds - httpTime;
-      _logger?.verbose("DeekWebClient: [$requestId] parse time: $parseTime ms");
-
-      // Notify listeners that the request is complete
-      _logger?.verbose(
-          "DeekWebClient: [$requestId] Completed ${request.name} in ${result.latencyMs} ms");
-      _notifyRequestCompleted(requestId, response.statusCode);
-    } on SocketException catch (e) {
-      // SocketException typically happens when there is no / broken network
-      // connection.
-      _logger?.error("DeekWebClient: [$requestId] SocketException: $e");
-      result = DeekWebResponse.fromError(
-          request: request, exception: DeekWebException.fromException(e));
-      _notifyRequestError(requestId, error: "SocketException");
-    } on ClientException catch (e) {
-      // ClientException is thrown by web when there is no / broken network
-      // connection.
-      _logger?.error("DeekWebClient: [$requestId] ClientException: $e");
-      result = DeekWebResponse.fromError(
-          request: request, exception: DeekWebException.fromException(e));
-      _notifyRequestError(requestId, error: "ClientException");
+  /// Does not route through legacy executeRequest overrides.
+  Future<DeekWebResponse<RequestType, ResponseType>> executeRequestWithOptions<
+          RequestType extends DeekWebRequest,
+          ResponseType>(DeekWebRequest<ResponseType> request,
+      {required DeekWebExecutionOptions options}) {
+    if (_closed) {
+      throw StateError('DeekWebClient is closed');
     }
-    return result;
+    final execution =
+        _Execution<RequestType, ResponseType>(this, request, options);
+    _active.add(execution);
+    execution.run();
+    return execution.completer.future;
   }
 
-  /// Adds a new *listener* to be notified of request status.
+  Future<T?> send<T>(DeekWebRequest<T> request) async =>
+      _data(await executeRequest<DeekWebRequest<T>, T>(request));
+
+  Future<T?> sendWithOptions<T>(DeekWebRequest<T> request,
+          {required DeekWebExecutionOptions options}) async =>
+      _data(await executeRequestWithOptions<DeekWebRequest<T>, T>(request,
+          options: options));
+
+  T? _data<T>(DeekWebResponse<DeekWebRequest<T>, T> response) {
+    if (response.exception != null) {
+      throw response.exception!;
+    }
+    if (!response.wasSuccessful) {
+      throw DeekWebHttpException(
+          statusCode: response.statusCode, data: response.data);
+    }
+    return response.data;
+  }
+
   void addListener(DeekWebListener listener) => _listeners.add(listener);
 
-  /// Removes a *listener* from further request status updates.
-  /// Returns true if listener was found and removed, false if not found.
-  bool removeListener(DeekWebListener listener) => _listeners.remove(listener);
-
-  /// Executes the request.
-  Future<Response> _executeRequest(DeekWebRequest request, String requestId) {
-    var headers = request.headers;
-
-    // If the includeCvHeader propert is set, include the requestId as a
-    // header.
-    if (includeCvHeader) {
-      headers[cvHeader] = requestId;
+  bool removeListener(DeekWebListener listener) {
+    for (final execution in _active) {
+      execution.relinquish(listener);
     }
-
-    // This switch statement is kinda ugly, but hey...it does its job.
-    // Make the appropriate request based on the request method.
-    switch (request.method) {
-      case Method.delete:
-        return http.delete(request.uri, headers: headers);
-      case Method.get:
-        return http.get(request.uri, headers: headers);
-      case Method.head:
-        return http.head(request.uri, headers: headers);
-      case Method.patch:
-        return http.patch(request.uri,
-            headers: headers, body: request.body, encoding: request.encoding);
-      case Method.post:
-        return http.post(request.uri,
-            headers: headers, body: request.body, encoding: request.encoding);
-      case Method.put:
-        return http.put(request.uri,
-            headers: headers, body: request.body, encoding: request.encoding);
-    }
+    return _listeners.remove(listener);
   }
 
-  /// Handles and parse ther esponse from the server.
-  DeekWebResponse<RequestType, ResponseType>
-      _handleResponse<RequestType extends DeekWebRequest, ResponseType>(
-          Response response,
-          DeekWebRequest<ResponseType> request,
-          Stopwatch latencyTimer,
-          String requestId) {
-    late DeekWebResponse<RequestType, ResponseType> result;
+  /// Settles logical work and callbacks synchronously. Does not undo server work.
+  void close() {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+    _ObserverFailure? failure;
+    for (final execution in _active.toList()) {
+      final observerFailure = execution.close();
+      failure ??= observerFailure;
+    }
     try {
-      // Get the raw response and pass it to the request for parsing.
-      _logger?.verbose("DeekWebClient: [$requestId] Parsing response");
-      var wrappedResponse = DeekWebHttpResponse.fromResponse(response);
-      ResponseType? parsedResponse = request.parseResponse(wrappedResponse);
-
-      // Construct a respones with the parsed data.
-      result = DeekWebResponse.fromResponse(
-          request: request,
-          data: parsedResponse,
-          statusCode: response.statusCode,
-          latencyMs: latencyTimer.elapsedMilliseconds);
-    } on TypeError catch (e) {
-      // This will be thrown if there is a parsing error in the *parseResponse*
-      // method of the DeekWebRequest.
-      _logger
-          ?.error("DeekWebClient: [$requestId] TypeError parsing response: $e");
-      result = DeekWebResponse.fromCode(
-          request: request,
-          statusCode: response.statusCode,
-          exception: DeekWebException.fromError(e),
-          latencyMs: latencyTimer.elapsedMilliseconds);
-      _notifyRequestError(requestId,
-          statusCode: response.statusCode, error: "Parsing error");
+      _ownedClient?.close();
+    } catch (e, s) {
+      failure ??= _ObserverFailure(e, s);
     }
-
-    return result;
-  }
-
-  /// Notifies any listeners that a request has started executing.
-  void _notifyRequestStarted(String requestId, String requestType) {
-    for (var listener in _listeners) {
-      listener.requestStarted(requestId: requestId, requestType: requestType);
+    if (failure != null) {
+      Error.throwWithStackTrace(failure.error, failure.stack);
     }
   }
 
-  /// Notifies any listeners that a request has completed execution.
-  void _notifyRequestCompleted(String requestId, int statusCode) {
-    for (var listener in _listeners) {
-      listener.requestCompleted(requestId: requestId, statusCode: statusCode);
+  http.Client get _transport =>
+      _borrowedClient ?? (_ownedClient ??= http.Client());
+
+  void _log(String Function() message, {_LogLevel level = _LogLevel.info}) {
+    final logger = _logger;
+    if (logger == null) {
+      return;
+    }
+    // Logging-only getters retain their preparation-failure semantics when
+    // enabled; only the logger's own Exceptions are isolated below.
+    final line = message();
+    try {
+      switch (level) {
+        case _LogLevel.info:
+          logger.info(line);
+        case _LogLevel.warn:
+          logger.warn(line);
+        case _LogLevel.error:
+          logger.error(line);
+      }
+    } on Exception {
+      // A logger failure cannot recursively log itself.
     }
   }
 
-  /// Notifies any listeners that a request has completed with an error.
-  void _notifyRequestError(String requestId, {int? statusCode, String? error}) {
-    for (var listener in _listeners) {
-      listener.requestCompletedWithError(
-          requestId: requestId, statusCode: statusCode, error: error);
+  static String _escape(String text) => text.replaceAllMapped(
+      RegExp(
+          r'[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]'),
+      (match) =>
+          '\\u${match[0]!.codeUnitAt(0).toRadixString(16).padLeft(4, '0')}');
+}
+
+enum _LogLevel { info, warn, error }
+
+class _ObserverFailure {
+  final Object error;
+  final StackTrace stack;
+  _ObserverFailure(this.error, this.stack);
+}
+
+abstract class _Active {
+  final Set<DeekWebListener> started = {};
+  _ObserverFailure? close();
+  void relinquish(DeekWebListener listener);
+}
+
+class _Execution<R extends DeekWebRequest, T> extends _Active {
+  final DeekWebClient client;
+  final DeekWebRequest<T> request;
+  final DeekWebExecutionOptions options;
+  final abort = Completer<void>();
+  Timer? timeoutTimer;
+  final Set<Timer> delayTimers = {};
+  void Function()? detach;
+  DeekWebException? stopReason;
+  final DateTime? deadline;
+  final completer = Completer<DeekWebResponse<R, T>>();
+  final watch = Stopwatch()..start();
+  final String id = const Uuid().v4();
+  final List<DeekWebListener> candidates;
+  bool settled = false;
+  int? status;
+
+  _Execution(this.client, this.request, this.options)
+      : candidates = client._listeners.toList(),
+        deadline = options.timeout == null
+            ? null
+            : DateTime.now().add(options.timeout!);
+
+  @override
+  void relinquish(DeekWebListener listener) {
+    candidates.remove(listener);
+    started.remove(listener);
+  }
+
+  _ObserverFailure? stop(DeekWebException reason, {bool closing = false}) {
+    if (settled) {
+      return null;
+    }
+    stopReason = reason;
+    return settle(
+        closing: closing,
+        result: DeekWebResponse<R, T>.fromCode(
+            request: request,
+            exception: reason,
+            statusCode: status,
+            latencyMs: watch.elapsedMilliseconds));
+  }
+
+  void check() {
+    if (!settled && options.cancellationToken?.isCancelled == true) {
+      stop(DeekWebCancelledException());
+    }
+    final timeout = options.timeout;
+    if (!settled && timeout != null && watch.elapsed >= timeout) {
+      stop(DeekWebTimeoutException());
+    }
+    if (settled) {
+      throw stopReason ?? DeekWebClientClosedException();
+    }
+  }
+
+  Future<DeekWebHttpResponse> dispatch(
+      int index, DeekWebPreparedRequest prepared) async {
+    check();
+    if (index < client.interceptors.length) {
+      return client.interceptors[index]
+          .intercept(prepared, _Chain(this, index + 1));
+    }
+    final attempt = http.AbortableRequest(prepared.method, prepared.uri,
+        abortTrigger: abort.future);
+    attempt.headers.addAll(prepared.headers);
+    attempt.bodyBytes = serializedBodyForTransport(prepared);
+    final response =
+        await http.Response.fromStream(await client._transport.send(attempt));
+    check();
+    return DeekWebHttpResponse.fromResponse(response);
+  }
+
+  void _observe(void Function() callback) {
+    try {
+      callback();
+    } on Exception {
+      client._log(() => 'request=$id failure=observer', level: _LogLevel.error);
+    }
+  }
+
+  void run() async {
+    try {
+      final name = request.name;
+      for (final listener in candidates.toList()) {
+        if (settled) {
+          return;
+        }
+        if (candidates.contains(listener) &&
+            client._listeners.contains(listener)) {
+          started.add(listener);
+          _observe(
+              () => listener.requestStarted(requestId: id, requestType: name));
+        }
+      }
+      if (settled) {
+        return;
+      }
+      detach = options.cancellationToken
+          ?.attach(() => stop(DeekWebCancelledException()));
+      check();
+      final timeout = options.timeout;
+      if (timeout != null) {
+        timeoutTimer = Timer(
+            timeout - watch.elapsed, () => stop(DeekWebTimeoutException()));
+      }
+      // Preparation has a separate boundary from transport and parsing.
+      final method = request.method;
+      final prepared = http.Request(method.name.toUpperCase(), request.uri);
+      prepared.headers.addAll(Map<String, String>.of(request.headers));
+      if (client.includeCvHeader) {
+        prepared.headers[client.cvHeader] = id;
+      }
+      if (method == Method.post ||
+          method == Method.put ||
+          method == Method.patch) {
+        final encoding = request.encoding;
+        if (encoding != null) {
+          prepared.encoding = encoding;
+        }
+        final body = request.body;
+        if (body is String) {
+          prepared.body = body;
+        } else if (body is List) {
+          prepared.bodyBytes = body.cast<int>();
+        } else if (body is Map) {
+          prepared.bodyFields = body.cast<String, String>();
+        } else if (body != null) {
+          throw ArgumentError('Unsupported request body');
+        }
+      }
+      client._log(() =>
+          'request=$id method=${prepared.method} name=${DeekWebClient._escape(name)} origin=${DeekWebClient._escape(request.uriForLogging)}');
+      if (settled) {
+        return;
+      }
+      final snapshot = DeekWebPreparedRequest(
+          method: prepared.method,
+          uri: prepared.url,
+          headers: prepared.headers,
+          bodyBytes: prepared.bodyBytes);
+      late DeekWebHttpResponse response;
+      try {
+        response = await dispatch(0, snapshot);
+      } on Exception catch (e, s) {
+        if (!settled) {
+          settle(
+              result: DeekWebResponse<R, T>.fromError(
+                  request: request,
+                  exception: DeekWebException.fromException(e, stackTrace: s),
+                  latencyMs: watch.elapsedMilliseconds));
+        }
+        return;
+      }
+      if (settled) {
+        return;
+      }
+      status = response.statusCode;
+      T? data;
+      try {
+        if (request is DeekWebAsyncRequest<T>) {
+          data = await (request as DeekWebAsyncRequest<T>)
+              .parseResponseAsync(response);
+        } else {
+          data = request.parseResponse(response);
+        }
+        check();
+      } on Exception catch (e, s) {
+        if (!options.captureParserExceptions) {
+          rethrow;
+        }
+        if (!settled) {
+          settle(
+              result: DeekWebResponse<R, T>.fromCode(
+                  request: request,
+                  statusCode: status,
+                  exception: DeekWebParseException(e, s),
+                  latencyMs: watch.elapsedMilliseconds));
+        }
+        return;
+      } on TypeError catch (e, s) {
+        settle(
+            result: DeekWebResponse<R, T>.fromCode(
+                request: request,
+                statusCode: status,
+                exception: DeekWebParseException(e, s),
+                latencyMs: watch.elapsedMilliseconds));
+        return;
+      }
+      if (!settled) {
+        settle(
+            result: DeekWebResponse<R, T>.fromResponse(
+                request: request,
+                data: data,
+                statusCode: status,
+                latencyMs: watch.elapsedMilliseconds));
+      }
+    } catch (e, s) {
+      if (!settled) {
+        settle(error: e, stack: s);
+      }
+    }
+  }
+
+  _ObserverFailure? settle(
+      {DeekWebResponse<R, T>? result,
+      Object? error,
+      StackTrace? stack,
+      bool closing = false}) {
+    if (settled) {
+      return null;
+    }
+    settled = true;
+    watch.stop();
+    timeoutTimer?.cancel();
+    detach?.call();
+    for (final timer in delayTimers) {
+      timer.cancel();
+    }
+    delayTimers.clear();
+    if (!abort.isCompleted) {
+      abort.complete();
+    }
+    Object? observerError;
+    StackTrace? observerStack;
+    void notify(void Function() callback) {
+      try {
+        _observe(callback);
+      } catch (e, s) {
+        observerError ??= e;
+        observerStack ??= s;
+      }
+    }
+
+    final failure = result?.exception;
+    final category = error != null
+        ? 'execution'
+        : failure is DeekWebCancelledException
+            ? 'cancelled'
+            : failure is DeekWebClientClosedException
+                ? 'closed'
+                : failure is DeekWebTimeoutException
+                    ? 'timeout'
+                    : failure != null
+                        ? 'structured'
+                        : result?.wasSuccessful == true
+                            ? 'none'
+                            : 'http';
+    final level = category == 'none'
+        ? _LogLevel.info
+        : category == 'http' || category == 'cancelled' || category == 'closed'
+            ? _LogLevel.warn
+            : _LogLevel.error;
+    notify(() => client._log(
+        () =>
+            'request=$id status=${result?.statusCode ?? status ?? '-'} failure=$category elapsedMs=${watch.elapsedMilliseconds}',
+        level: level));
+    for (final listener in started.toList()) {
+      if (!started.contains(listener) ||
+          !client._listeners.contains(listener)) {
+        continue;
+      }
+      notify(() {
+        if (result?.wasSuccessful == true) {
+          listener.requestCompleted(
+              requestId: id, statusCode: result!.statusCode!);
+        } else {
+          listener.requestCompletedWithError(
+              requestId: id,
+              statusCode: result?.statusCode ?? status,
+              error: error != null
+                  ? 'execution'
+                  : result?.exception != null
+                      ? 'structured'
+                      : 'http');
+        }
+      });
+    }
+    started.clear();
+    client._active.remove(this);
+    if (error != null) {
+      completer.completeError(error, stack!);
+    } else if (observerError != null && !closing) {
+      completer.completeError(observerError!, observerStack!);
+    } else {
+      completer.complete(result!);
+    }
+    if (closing && observerError != null) {
+      return _ObserverFailure(observerError!, observerStack!);
+    }
+    return null;
+  }
+
+  @override
+  _ObserverFailure? close() =>
+      stop(DeekWebClientClosedException(), closing: true);
+}
+
+class _Chain extends DeekWebInterceptorChain {
+  final _Execution execution;
+  final int next;
+  bool _busy = false;
+  _Chain(this.execution, this.next);
+
+  @override
+  bool get isCancelled =>
+      execution.settled ||
+      execution.options.cancellationToken?.isCancelled == true;
+  @override
+  DateTime? get deadline => execution.deadline;
+  @override
+  Duration? get remaining {
+    final timeout = execution.options.timeout;
+    if (timeout == null) {
+      return null;
+    }
+    final value = timeout - execution.watch.elapsed;
+    return value < Duration.zero ? Duration.zero : value;
+  }
+
+  @override
+  void throwIfCancelled() => execution.check();
+
+  @override
+  Future<void> delay(Duration duration) async {
+    throwIfCancelled();
+    final done = Completer<void>();
+    final timer = Timer(duration, done.complete);
+    execution.delayTimers.add(timer);
+    try {
+      await Future.any([done.future, execution.abort.future]);
+      throwIfCancelled();
+    } finally {
+      timer.cancel();
+      execution.delayTimers.remove(timer);
+    }
+  }
+
+  @override
+  Future<DeekWebHttpResponse> proceed(DeekWebPreparedRequest request) async {
+    if (_busy) {
+      throw StateError('Overlapping proceed calls are not supported');
+    }
+    _busy = true;
+    try {
+      throwIfCancelled();
+      return await execution.dispatch(next, request);
+    } finally {
+      _busy = false;
     }
   }
 }
