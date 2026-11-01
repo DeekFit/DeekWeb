@@ -26,11 +26,19 @@ abstract class DeekWebRequest<T> {
   /// Gets the absolute URI to use when making the request.
   Uri get uri;
 
-  /// Gets a URI to be used in logging requests. By default just returns the
-  /// *uri* property. If your URI contains any personal or identifiable
-  /// information, consider overriding *uriForLogging* to avoid logging
-  /// personal information.
-  String get uriForLogging => uri.toString();
+  /// Origin only by default. Overrides are responsible for their own privacy.
+  String get uriForLogging {
+    final value = uri;
+    if (!value.hasScheme ||
+        value.host.isEmpty ||
+        (value.scheme != 'http' && value.scheme != 'https')) {
+      return '[unavailable-origin]';
+    }
+    final host = value.host.contains(':') && !value.host.startsWith('[')
+        ? '[${value.host}]'
+        : value.host;
+    return '${value.scheme}://$host${value.hasPort ? ':${value.port}' : ''}';
+  }
 
   /// Gets the body for the request. Null by default.
   dynamic get body => null;
@@ -79,4 +87,15 @@ enum Method {
   ///
   /// Updates or replaces existing data on the server.
   put
+}
+
+/// Explicit async parsing. Direct synchronous use by a legacy fake fails loudly.
+abstract class DeekWebAsyncRequest<T> extends DeekWebRequest<T> {
+  const DeekWebAsyncRequest();
+  Future<T?> parseResponseAsync(DeekWebHttpResponse response);
+
+  @override
+  T? parseResponse(DeekWebHttpResponse response) {
+    throw UnsupportedError('Use the asynchronous execution engine');
+  }
 }

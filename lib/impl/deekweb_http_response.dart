@@ -10,6 +10,16 @@ class DeekWebHttpResponse {
   /// Creates a new *DeekWebHttpResponse* from an *http.Response* object.
   DeekWebHttpResponse.fromResponse(Response response) : _response = response;
 
+  /// Creates a synthetic response without requiring package:http in callers.
+  DeekWebHttpResponse(
+      {required int statusCode,
+      List<int> bodyBytes = const [],
+      Map<String, String> headers = const {},
+      String? reasonPhrase})
+      : _response = Response.bytes(List<int>.of(bodyBytes), statusCode,
+            headers: Map<String, String>.of(headers),
+            reasonPhrase: reasonPhrase);
+
   /// Gets the HTTP status code for the response.
   int get statusCode => _response.statusCode;
 

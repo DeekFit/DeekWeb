@@ -9,3 +9,7 @@ export 'package:deekweb/impl/deekweb_client.dart';
 export 'package:deekweb/impl/deekweb_http_response.dart';
 export 'package:deekweb/impl/deekweb_request.dart';
 export 'package:deekweb/impl/deekweb_response.dart';
+
+export 'impl/deekweb_execution_options.dart';
+export 'impl/deekweb_interceptor.dart' hide serializedBodyForTransport;
+export 'impl/deekweb_json.dart';

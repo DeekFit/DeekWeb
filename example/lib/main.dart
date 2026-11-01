@@ -33,6 +33,7 @@ class ExampleAppHomePage extends StatefulWidget {
 class _ExampleAppHomePageState extends State<ExampleAppHomePage>
     implements DeekWebListener {
   final DeekWebClient client = DeekWebClient();
+  bool _disposing = false;
   String status = "waiting";
   String response = "";
 
@@ -42,6 +43,17 @@ class _ExampleAppHomePageState extends State<ExampleAppHomePage>
 
     // Add this class as a listener to the `DeekWebClient`
     client.addListener(this);
+  }
+
+  @override
+  void dispose() {
+    _disposing = true;
+    try {
+      client.close();
+    } finally {
+      client.removeListener(this);
+      super.dispose();
+    }
   }
 
   @override
@@ -61,6 +73,9 @@ class _ExampleAppHomePageState extends State<ExampleAppHomePage>
   }
 
   Future startRequest() async {
+    if (!mounted || _disposing) {
+      return;
+    }
     setState(() => response = "");
     // First create your request
     var request = ExampleRequest(latitude: 39.2741349, longitude: -74.5760937);
@@ -68,28 +83,42 @@ class _ExampleAppHomePageState extends State<ExampleAppHomePage>
     // Execute the request with the client
     var result = await client.executeRequest(request);
 
-    // Check the parsed response
-    if (result.data != null) {
-      response = "ID: ${result.data!.id}, Type: ${result.data!.type}";
-    } else {
-      response = "null response";
+    if (!mounted || _disposing) {
+      return;
     }
+    setState(() {
+      // Check the parsed response
+      if (result.data != null) {
+        response = "ID: ${result.data!.id}, Type: ${result.data!.type}";
+      } else {
+        response = "null response";
+      }
+    });
   }
 
   @override
   void requestCompleted({required String requestId, required int statusCode}) {
+    if (!mounted || _disposing) {
+      return;
+    }
     setState(() => status = "Request completed, status code: $statusCode");
   }
 
   @override
   void requestCompletedWithError(
       {required String requestId, int? statusCode, String? error}) {
+    if (!mounted || _disposing) {
+      return;
+    }
     setState(() => status = "Request error: ${error ?? "null"}");
   }
 
   @override
   void requestStarted(
       {required String requestId, required String requestType}) {
+    if (!mounted || _disposing) {
+      return;
+    }
     setState(() => status = "Request started: $requestType");
   }
 }

@@ -52,8 +52,8 @@ class DeekWebResponse<RequestType extends DeekWebRequest, ResponseType> {
       : data = null;
 
   /// Creates a *DeekWebResponse* from an error, with no other response data.
-  DeekWebResponse.fromError({required this.request, required this.exception})
-      : latencyMs = 0,
-        data = null,
+  DeekWebResponse.fromError(
+      {required this.request, required this.exception, this.latencyMs = 0})
+      : data = null,
         statusCode = null;
 }
